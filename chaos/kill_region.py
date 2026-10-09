@@ -31,6 +31,7 @@ import os
 import pathlib
 import signal
 import subprocess
+import sys
 import time
 
 import httpx
@@ -96,7 +97,17 @@ def kill(region: str, mode: str, backend: str, force_both: bool, mock: bool):
         # netblock: SIGSTOP -> TCP handshake vẫn xong nhưng không ai trả lời => request TREO
         #           (đúng hành vi của iptables DROP ở tầng app)
         # stop    : SIGKILL -> cổng đóng => ConnectError ngay
-        os.kill(pid, signal.SIGSTOP if mode == "netblock" else signal.SIGKILL)
+        if sys.platform == "win32":
+            import ctypes
+            h = ctypes.windll.kernel32.OpenProcess(0x1F0FFF, False, pid)
+            if h:
+                if mode == "netblock":
+                    ctypes.windll.ntdll.NtSuspendProcess(h)
+                else:
+                    ctypes.windll.kernel32.TerminateProcess(h, 1)
+                ctypes.windll.kernel32.CloseHandle(h)
+        else:
+            os.kill(pid, signal.SIGSTOP if mode == "netblock" else signal.SIGKILL)
     else:
         svc = f"serving-{region}"
         if mode == "stop":
@@ -111,7 +122,14 @@ def restore(region: str, backend: str):
     if backend == "bare":
         pid = pid_of(region)
         if pid:
-            os.kill(pid, signal.SIGCONT)
+            if sys.platform == "win32":
+                import ctypes
+                h = ctypes.windll.kernel32.OpenProcess(0x1F0FFF, False, pid)
+                if h:
+                    ctypes.windll.ntdll.NtResumeProcess(h)
+                    ctypes.windll.kernel32.CloseHandle(h)
+            else:
+                os.kill(pid, signal.SIGCONT)
             return event(action="restore", region=region, method="SIGCONT", pid=pid)
         return event(action="restore", region=region, method="need_manual_start",
                      note="process da bi SIGKILL, chay `make up-bare` lai")

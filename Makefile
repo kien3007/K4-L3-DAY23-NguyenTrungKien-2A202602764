@@ -3,7 +3,7 @@
 seed:
 	python3 state/seed_vectors.py --region a --docs 200
 	python3 state/seed_vectors.py --region b --docs 0 --weights-mb 0
-	printf a > edge/active_region
+	python3 -c "import pathlib; pathlib.Path('edge/active_region').write_text('a')"
 
 up-bare:
 	bash scripts/up_bare.sh

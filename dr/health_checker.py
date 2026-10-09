@@ -29,13 +29,75 @@ URL = {"a": "http://127.0.0.1:8001", "b": "http://127.0.0.1:8002"}
 
 
 def probe(region: str, timeout: float) -> tuple[bool, str]:
-    """TODO: trả về (ready, reason). Timeout PHẢI có — netblock làm request treo mãi."""
-    raise NotImplementedError
+    """Trả về (ready, reason). Timeout PHẢI có — netblock làm request treo mãi."""
+    url = f"{URL[region]}/readyz"
+    try:
+        r = httpx.get(url, timeout=timeout)
+        if r.status_code == 200:
+            return True, "ok"
+        try:
+            data = r.json()
+            reasons = data.get("reasons", [])
+            reason_str = ",".join(reasons) if reasons else f"status_{r.status_code}"
+        except Exception:
+            reason_str = f"status_{r.status_code}"
+        return False, reason_str
+    except Exception as e:
+        return False, type(e).__name__
 
 
 def run(interval: float, timeout: float, threshold: int, duration: float, out: pathlib.Path):
-    """TODO: vòng lặp poll + phát hiện transition + ghi JSONL."""
-    raise NotImplementedError
+    """Vòng lặp poll + phát hiện transition + ghi JSONL."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    state = {"a": "HEALTHY", "b": "HEALTHY"}
+    consecutive_fails = {"a": 0, "b": 0}
+
+    t_start = time.time()
+    while time.time() - t_start < duration:
+        t_poll = time.time()
+        for region in ["a", "b"]:
+            ok, reason = probe(region, timeout)
+            if ok:
+                consecutive_fails[region] = 0
+                if state[region] == "UNHEALTHY":
+                    state[region] = "HEALTHY"
+                    ev = {
+                        "ts": time.time(),
+                        "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "event": "state_change",
+                        "region": region,
+                        "from": "UNHEALTHY",
+                        "to": "HEALTHY",
+                        "reason": reason,
+                        "consecutive_fails": 0,
+                        "interval_s": interval,
+                        "threshold": threshold,
+                    }
+                    with out.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(ev) + "\n")
+                    print("HEALTH_CHECKER", json.dumps(ev))
+            else:
+                consecutive_fails[region] += 1
+                if state[region] == "HEALTHY" and consecutive_fails[region] >= threshold:
+                    state[region] = "UNHEALTHY"
+                    ev = {
+                        "ts": time.time(),
+                        "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "event": "state_change",
+                        "region": region,
+                        "from": "HEALTHY",
+                        "to": "UNHEALTHY",
+                        "reason": reason,
+                        "consecutive_fails": consecutive_fails[region],
+                        "interval_s": interval,
+                        "threshold": threshold,
+                    }
+                    with out.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(ev) + "\n")
+                    print("HEALTH_CHECKER", json.dumps(ev))
+
+        t_elapsed = time.time() - t_poll
+        time.sleep(max(0.0, interval - t_elapsed))
 
 
 if __name__ == "__main__":
